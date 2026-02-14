@@ -1,0 +1,13 @@
+﻿id,description,dataset,category,subcategory,region,delay,universe,type,dateCoverage,coverage,userCount,alphaCount,themes
+adv20,Average daily volume in past 20 days,"{'id': 'pv1', 'name': 'Price Volume Data for Equity'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,MATRIX,1.0,1.0,14378,91287,[]
+cap,Daily market capitalization (in millions),"{'id': 'pv1', 'name': 'Price Volume Data for Equity'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,MATRIX,1.0,1.0,23821,378711,[]
+close,Daily close price,"{'id': 'pv1', 'name': 'Price Volume Data for Equity'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,MATRIX,1.0,1.0,37418,465837,[]
+dividend,Dividend,"{'id': 'pv1', 'name': 'Price Volume Data for Equity'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,MATRIX,1.0,1.0,3777,10617,[]
+high,Daily high price,"{'id': 'pv1', 'name': 'Price Volume Data for Equity'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,MATRIX,1.0,1.0,11370,50455,[]
+low,Daily low price,"{'id': 'pv1', 'name': 'Price Volume Data for Equity'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,MATRIX,1.0,1.0,10815,43637,[]
+open,Daily open price,"{'id': 'pv1', 'name': 'Price Volume Data for Equity'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,MATRIX,1.0,1.0,10008,47522,[]
+returns,Daily returns,"{'id': 'pv1', 'name': 'Price Volume Data for Equity'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,MATRIX,1.0,1.0,22158,273247,[]
+sharesout,Daily outstanding shares (in millions),"{'id': 'pv1', 'name': 'Price Volume Data for Equity'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,MATRIX,1.0,1.0,5322,27565,[]
+split,Stock split ratio,"{'id': 'pv1', 'name': 'Price Volume Data for Equity'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,MATRIX,1.0,1.0,2657,14978,[]
+volume,Daily volume,"{'id': 'pv1', 'name': 'Price Volume Data for Equity'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,MATRIX,1.0,1.0,24355,247797,[]
+vwap,Daily volume weighted average price,"{'id': 'pv1', 'name': 'Price Volume Data for Equity'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,MATRIX,1.0,1.0,15611,59178,[]

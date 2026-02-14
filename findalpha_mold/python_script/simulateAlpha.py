@@ -2,7 +2,9 @@ import requests
 import json
 import time
 import os
+import argparse
 import pandas as pd
+from pathlib import Path
 from datetime import datetime
 
 from requests.auth import HTTPBasicAuth
@@ -10,11 +12,9 @@ from time import sleep
 
 
 # =================配置区域=================
-# 1. 填入你的 API 凭证 (或者从文件读取)
+# ----------------- API 凭证 -------------------
 API_KEY = "你的_API_KEY_在这里"
 API_SECRET = "你的_API_SECRET_在这里"
-
-searchScope = {'region': 'USA', 'delay': '1', 'universe': 'TOP3000', 'instrumentType': 'EQUITY'}
 
 # 优先从脚本所在目录读取凭据文件，避免因不同工作目录导致找不到文件
 creds_path = os.path.join(os.path.dirname(__file__), 'brain_credentials.json')
@@ -34,13 +34,16 @@ except FileNotFoundError:
 except Exception:
     raise
 
+# ----------------- API 基础 URL -----------------
 BASE_URL = "https://api.worldquantbrain.com"
 
-# 会话有效期（秒）：4小时 = 14400秒，提前 30 分钟刷新以留余量
+# ----------------- 会话有效期（秒）----------------
 SESSION_TTL = 3.5 * 3600  # 3.5 小时
+
 
 # =================核心函数=================
 
+# ------------------ 会话管理 ---------------------
 class BrainSession:
     """自动续期的会话包装器，每隔 ~3.5 小时自动重新认证（会话有效期 4 小时）"""
 
@@ -102,107 +105,63 @@ def get_session():
     return BrainSession()
 
 
-def get_datafields(s, searchScope, dataset_id: str = '', search: str = ''):
+# ---------------- read alphas ----------------
+def read_alphas(file_path):
+    """
+    从 CSV 文件读取 alpha 表达式
     
-    instrument_type = searchScope['instrumentType']
-    region = searchScope['region']
-    delay = searchScope['delay']
-    universe = searchScope['universe']
+    Args:
+        file_path: CSV 文件路径，每行一个 alpha 表达式
     
-    first_json = None
-    if len(search) == 0:
-        url_template = "https://api.worldquantbrain.com/data-fields?" + \
-            f"&instrumentType={instrument_type}" + \
-            f"&region={region}&delay={str(delay)}&universe={universe}&dataset.id={dataset_id}&limit=50" + \
-            "&offset={x}"
-        # 只请求一次 offset=0，同时拿 count 和第一页数据
-        first_resp = s.get(url_template.format(x=0), timeout=15)
-        first_json = first_resp.json()
-        count = first_json['count']
-        print(f"[INFO] 共 {count} 条数据，需要 {(count + 49) // 50} 页")
-    else:
-        url_template = "https://api.worldquantbrain.com/data-fields?" + \
-            f"&instrumentType={instrument_type}" + \
-            f"&region={region}&delay={str(delay)}&universe={universe}&limit=50" + \
-            f"&search={search}" + \
-            "&offset={x}"
-        count = 100
-        
-    datafields_list = []
-    for x in range(0, count, 50):
-        # offset=0 已经请求过了，直接复用，不再重复请求
-        if x == 0 and first_json is not None:
-            payload = first_json
-        else:
-            # 遵守限流：每次请求前等待 1.1 秒（API 限制每秒 1 次）
-            sleep(1.1)
-            url = url_template.format(x=x)
-            resp = s.get(url, timeout=15)
-            # 如果被限流 (429)，等待后重试
-            if resp.status_code == 429:
-                wait = float(resp.headers.get('Retry-After', 2))
-                print(f"[限流] 等待 {wait}s 后重试 offset={x}")
-                sleep(wait)
-                resp = s.get(url, timeout=15)
-            payload = resp.json()
-
-        if 'results' in payload:
-            datafields_list.append(payload['results'])
-            print(f"[OK] offset={x} 获取 {len(payload['results'])} 条")
-        else:
-            print(f"[WARN] offset={x} 响应无 'results'，keys={list(payload.keys())}")
-    
-    datafields_list_flat = [item for sublist in datafields_list for item in sublist]
-    datafields_df = pd.DataFrame(datafields_list_flat)
-    print(f"[INFO] 实际获取 {len(datafields_df)} 条 datafields")
-    return datafields_df
-
-if __name__ == "__main__":
-    sess = get_session()
-
-    fundamental6 = get_datafields(s=sess, searchScope=searchScope, dataset_id='fundamental6')
-    fundamental6 = fundamental6[fundamental6['type']=="MATRIX"]
-    # fundamental6.head()
+    Returns:
+        list: alpha 表达式列表
+    """
     alpha_list = []
-    for _, row in fundamental6.iterrows():
-        datafield_id = row['id']
-        for i in range(2): 
-            is_inverse = '-'
-            if (i == 0):
-                is_inverse = ''
-            print("正在将如下Alpha表达式与setting封装")
-            alpha_expression = f'{is_inverse}{datafield_id}/assets'
-            print(alpha_expression)
-            simulation_data = {
-                'type': 'REGULAR',
-                'settings': {
-                    'instrumentType': 'EQUITY',
-                    'region': 'USA',
-                    'universe': 'TOP3000',
-                    'delay': 1,
-                    'decay': 0,
-                    'neutralization': 'SUBINDUSTRY',
-                    'truncation': 0.08,
-                    'pasteurization': 'ON',
-                    'unitHandling': 'VERIFY',
-                    'nanHandling': 'ON',
-                    'language': 'FASTEXPR',
-                    'visualization': False,
-                },
-                'regular': alpha_expression
-            }
-            alpha_list.append(simulation_data)
+    try:
+        df = pd.read_csv(file_path)
+        if 'alpha' in df.columns:
+            alpha_list = df['alpha'].dropna().tolist()
+        else:
+            alpha_list = df.iloc[:, 0].dropna().tolist()
+        print(f"[成功] 从 {file_path} 读取了 {len(alpha_list)} 个 Alpha 表达式")
+    except FileNotFoundError:
+        print(f"[警告] 文件不存在: {file_path}")
+    except Exception as e:
+        print(f"[错误] 读取文件失败: {e}")
+    return alpha_list
     
-    print(f'there are {len(alpha_list)} Alphas to simulate')
 
-    for i, alpha in enumerate(alpha_list, 1):
+# ---------------- 回测函数 ----------------
+def simulate_alpha(sess, alpha_expressions, saved_path, elite_path):
+    for i, alpha_expression in enumerate(alpha_expressions, 1):
+        print("正在将如下Alpha表达式与setting封装")
+        print(alpha_expression)
+        simulation_data = {
+            'type': 'REGULAR',
+            'settings': {
+                'instrumentType': 'EQUITY',
+                'region': 'USA',
+                'universe': 'TOP3000',
+                'delay': 1,
+                'decay': 0,
+                'neutralization': 'SUBINDUSTRY',
+                'truncation': 0.08,
+                'pasteurization': 'ON',
+                'unitHandling': 'VERIFY',
+                'nanHandling': 'ON',
+                'language': 'FASTEXPR',
+                'visualization': False,
+            },
+            'regular': alpha_expression
+        }
+
         print(f"\n{'='*60}")
-        print(f"[{i}/{len(alpha_list)}] 正在回测: {alpha.get('regular', '?')}")
+        print(f"[{i}/{len(alpha_expressions)}] 正在回测: {simulation_data.get('regular', '?')}")
         print(f"{'='*60}")
 
         sim_resp = sess.post(
             'https://api.worldquantbrain.com/simulations',
-            json=alpha,
+            json=simulation_data,
         )
 
         # ===== 调试：检查 POST 响应 =====
@@ -279,21 +238,26 @@ if __name__ == "__main__":
             ts = datetime.now(datetime.UTC).isoformat() if hasattr(datetime, 'UTC') else datetime.utcnow().isoformat() + 'Z'
             record = {
                 'alpha_id': alpha_id,
-                'expression': alpha.get('regular') if isinstance(alpha, dict) else None,
+                'expression': alpha_expression,
                 'sharpe': sharpe,
                 'fitness': fitness,
                 'returns': returns_,
                 'turnover': turnover,
                 'timestamp': ts
             }
-            save_path = os.path.join(os.path.dirname(__file__), 'saved_alphas.jsonl')
-            with open(save_path, 'a', encoding='utf-8') as fout:
+            
+            saved_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(saved_path, 'a', encoding='utf-8') as fout:
                 fout.write(json.dumps(record, ensure_ascii=False) + '\n')
-            print(f"[保存] 已将 alpha 保存到 {save_path}")
+            print(f"[保存] 已将 alpha 保存到 {saved_path}")
 
             # 高质量 alpha 额外保存（Sharpe > 1.25 且 Fitness > 1）
             if sharpe is not None and fitness is not None and sharpe > 1.25 and fitness > 1:
-                elite_path = os.path.join(os.path.dirname(__file__), 'elite_alphas.jsonl')
+                elite_path.parent.mkdir(parents=True, exist_ok=True)
+                if not elite_path.exists():
+                    with open(elite_path, 'w', encoding='utf-8') as fout:
+                        fout.write(json.dumps({"submitted": 0}, ensure_ascii=False) + '\n')
+                    print(f"[初始化] 创建精英文件并写入元数据: {elite_path}")
                 with open(elite_path, 'a', encoding='utf-8') as fout:
                     fout.write(json.dumps(record, ensure_ascii=False) + '\n')
                 print(f"[精选] Sharpe={sharpe}, Fitness={fitness} >>> 已额外保存到 {elite_path}")
@@ -303,3 +267,71 @@ if __name__ == "__main__":
             import traceback
             traceback.print_exc()
             sleep(10)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='WorldQuant Brain Alpha 批量回测工具')
+    parser.add_argument(
+        '--input', '-i',
+        type=str,
+        required=True,
+        help='输入的 Alpha 表达式 CSV 文件路径'
+    )
+    parser.add_argument(
+        '--output', '-o',
+        type=str,
+        required=True,
+        help='输出结果的目录路径'
+    )
+    parser.add_argument(
+        '--yes', '-y',
+        action='store_true',
+        help='跳过确认，直接执行'
+    )
+    
+    args = parser.parse_args()
+    
+    GENERATED_ALPHAS_PATH = Path(args.input)
+    OUTPUT_DIR = Path(args.output)
+    SAVED_ALPHAS_PATH = OUTPUT_DIR / 'saved_alphas.jsonl'
+    SAVED_ELITE_ALPHAS_PATH = OUTPUT_DIR / 'elite_alphas.jsonl'
+    
+    sess = get_session()
+
+    print("\n" + "="*60)
+    print("开始加载 Alpha 表达式...")
+    print("="*60)
+    
+    alphas = read_alphas(GENERATED_ALPHAS_PATH)
+    
+    print(f"\n[汇总] 共加载 {len(alphas)} 个 Alpha 表达式")
+    
+    if len(alphas) == 0:
+        print("[错误] 没有找到任何 Alpha 表达式，请检查文件路径")
+        exit()
+    
+    print("\n" + "="*60)
+    print("配置信息确认")
+    print("="*60)
+    print(f"  输入文件: {GENERATED_ALPHAS_PATH}")
+    print(f"  输出目录: {OUTPUT_DIR}")
+    print(f"  普通结果: {SAVED_ALPHAS_PATH}")
+    print(f"  精选结果: {SAVED_ELITE_ALPHAS_PATH}")
+    print(f"  Alpha 数量: {len(alphas)}")
+    print("="*60)
+    
+    if not args.yes:
+        user_input = input("\n确认开始回测? (输入 y 继续，其他键退出): ")
+        if user_input.lower() != 'y':
+            print("[取消] 用户取消操作")
+            exit()
+    
+    print("\n" + "="*60)
+    print("开始批量回测...")
+    print("="*60 + "\n")
+    
+    simulate_alpha(sess, alphas, SAVED_ALPHAS_PATH, SAVED_ELITE_ALPHAS_PATH)
+    
+    print("\n" + "="*60)
+    print("所有回测任务完成！")
+    print("="*60)

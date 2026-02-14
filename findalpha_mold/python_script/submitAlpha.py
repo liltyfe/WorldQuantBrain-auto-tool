@@ -29,7 +29,7 @@ BASE_URL = "https://api.worldquantbrain.com"
 
 # 默认使用相对于项目的相对路径（基于本文件位置）。
 # 如需使用其它文件，请直接改为绝对路径或在运行前覆盖该变量。
-elite_alpha_path = Path(__file__).resolve().parent.parent / 'alpha_result' / 'fund6_subindustry' / 'elite_alphas.jsonl'
+elite_alpha_path = Path(__file__).resolve().parent / 'alpha_result' / 'fund6_subindustry' / 'elite_alphas.jsonl'
 submit_count = 1  # 提交的 Alpha 数量，默认为 1
 
 # =================核心函数=================
@@ -74,6 +74,7 @@ def get_session():
 def submit_alpha(sess, objs, count=submit_count):
     initial_count = count  # 保存初始值，用于计算已成功提交数量
     success_count = 0  # 记录成功提交的数量
+    submitted_count = 0  # 记录已提交的数量
 
 
     # 解析alpha_ids参数，支持单字符串或列表
@@ -88,7 +89,7 @@ def submit_alpha(sess, objs, count=submit_count):
     for alpha_id in alpha_ids:
         if success_count >= initial_count:
             print(f"[完成] 已提交 {success_count} 个 Alpha，达到设定的提交数量上限。")
-            return success_count
+            return submitted_count
         print(f"[中] 正在提交 Alpha ID: {alpha_id} ...")
         submit_url = f"{BASE_URL}/alphas/{alpha_id}/submit"
         result = sess.post(submit_url)
@@ -105,15 +106,17 @@ def submit_alpha(sess, objs, count=submit_count):
         if result.status_code == 200:
             print(f"[成功] Alpha 提交成功！")
             success_count += 1
+            submitted_count += 1
         else:
             print(f"[失败] 提交失败: {result.text}")
+            submitted_count += 1  # 即使失败也算作已处理一个 Alpha，继续提交下一个
 
     if success_count >= initial_count:
         print(f"[完成] 已提交 {success_count} 个 Alpha，达到设定的提交数量上限。")
-        return success_count
+        return submitted_count
     else:
         print(f"[未完成] 已提交 {success_count} 个 Alpha，Alpha数量不够，未达到设定的提交数量上限。")
-        return success_count
+        return submitted_count
 
 
 # =================主程序=================
@@ -128,24 +131,24 @@ if __name__ == "__main__":
     if not objs:
         print(f"[错误] 没有找到有效的精英 Alpha 表达式，请检查文件路径和内容。")
         exit()
-    submited_count = objs[0].get("submited", 0) if isinstance(objs[0], dict) else -1
-    if submited_count == -1:
-        print(f"[警告] 没有找到 'submited' 字段，无法确定已提交数量，请检查文件内容。")
+    submitted_count = objs[0].get("submitted", 0) if isinstance(objs[0], dict) else -1
+    if submitted_count == -1:
+        print(f"[警告] 没有找到 'submitted' 字段，无法确定已提交数量，请检查文件内容。")
         exit()
-    elite_alphas = objs[submited_count + 1:]  # 跳过头部元数据(objs[0])和已提交的N个Alpha
+    elite_alphas = objs[submitted_count + 1:]  # 跳过头部元数据(objs[0])和已提交的N个Alpha
     # 3. 提交 Alpha
     actual_submitted_count = submit_alpha(session, elite_alphas, submit_count)
     print(f"[结果] 剩余可提交的 Alpha 数量: {len(elite_alphas) - actual_submitted_count}")
 
     # 4. 更新已提交数量并写回文件
-    if objs and isinstance(objs[0], dict) and "submited" in objs[0]:
-        objs[0]["submited"] += actual_submitted_count
+    if objs and isinstance(objs[0], dict) and "submitted" in objs[0]:
+        objs[0]["submitted"] += actual_submitted_count
         
         # 将更新后的数据写回文件
         with open(elite_alpha_path, 'w', encoding='utf-8') as f:
             for obj in objs:
                 f.write(json.dumps(obj) + '\n')
-        print(f"[更新] 已将新的提交数量 ({objs[0]['submited']}) 更新到文件: {elite_alpha_path}")
+        print(f"[更新] 已将新的提交数量 ({objs[0]['submitted']}) 更新到文件: {elite_alpha_path}")
     else:
         print(f"[警告] 无法更新文件中的提交数量，因首行格式不符合预期。")
 

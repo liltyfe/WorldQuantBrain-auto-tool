@@ -15,9 +15,6 @@
 ```
 findalpha_mold/
 ├── alpha_result/
-│   └── fund6_subindustry/
-│       ├── elite_alphas.jsonl    # 高质量 Alpha (Sharpe>1.25 且 Fitness>1)
-│       └── saved_alphas.jsonl    # 所有已测试的 Alpha
 ├── brain_credentials.json        # API 凭证（已排除在版本控制外）
 ├── findAlpha.py                  # 自动搜索和回测 Alpha
 ├── submitAlpha.py                # 批量提交 Alpha

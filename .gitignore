@@ -1,5 +1,14 @@
 # 敏感文件 - 账号密码
 api/brain_credentials.json
+findalpha_mold/brain_credentials.json
+**/brain_credentials.json
+findalpha_mold/python_script/brain_credentials.json
+
+# result
+findalpha_mold/alpha_result/
+
+# alpha_expression
+findalpha_mold/alpha_expressions/
 
 # Python
 __pycache__/
