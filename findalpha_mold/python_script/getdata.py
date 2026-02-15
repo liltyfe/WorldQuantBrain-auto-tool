@@ -3,7 +3,7 @@ import json
 import time
 import os
 import pandas as pd
-import pathlib as Path
+from pathlib import Path
 from datetime import datetime
 
 from requests.auth import HTTPBasicAuth
@@ -11,11 +11,8 @@ from time import sleep
 
 
 # =================配置区域=================
-# 1. 填入你的 API 凭证 (或者从文件读取)
 API_KEY = "你的_API_KEY_在这里"
 API_SECRET = "你的_API_SECRET_在这里"
-
-toget_dataset_id = 'pv1'
 
 searchScope = {'region': 'USA', 'delay': '1', 'universe': 'TOP3000', 'instrumentType': 'EQUITY'}
 
@@ -24,7 +21,6 @@ creds_path = os.path.join(os.path.dirname(__file__), 'brain_credentials.json')
 try:
     with open(creds_path, 'r') as f:
         creds = json.load(f)
-        # 支持两种格式：["API_KEY", "API_SECRET"] 或 {"API_KEY":..., "API_SECRET":...}
         if isinstance(creds, (list, tuple)) and len(creds) >= 2:
             API_KEY, API_SECRET = creds[:2]
         elif isinstance(creds, dict):
@@ -38,9 +34,8 @@ except Exception:
     raise
 
 BASE_URL = "https://api.worldquantbrain.com"
+SESSION_TTL = 3.5 * 3600
 
-# 会话有效期（秒）：4小时 = 14400秒，提前 30 分钟刷新以留余量
-SESSION_TTL = 3.5 * 3600  # 3.5 小时
 
 # =================核心函数=================
 
@@ -50,11 +45,10 @@ class BrainSession:
     def __init__(self):
         self._session = requests.Session()
         self._session.auth = HTTPBasicAuth(API_KEY, API_SECRET)
-        self._last_auth_time = 0  # epoch, 强制首次认证
+        self._last_auth_time = 0
         self._authenticate()
 
     def _authenticate(self):
-        """执行认证并刷新计时器"""
         response = self._session.post(f"{BASE_URL}/authentication")
         if response.status_code in (200, 201):
             self._last_auth_time = time.time()
@@ -64,13 +58,11 @@ class BrainSession:
             exit()
 
     def _ensure_valid(self):
-        """检查会话是否即将过期，如过期则自动重新认证"""
         elapsed = time.time() - self._last_auth_time
         if elapsed >= SESSION_TTL:
             print(f"[续期] 会话已持续 {elapsed/3600:.1f} 小时，正在重新认证...")
             self._authenticate()
 
-    # ---------- 代理常用 HTTP 方法 ----------
     def get(self, *args, **kwargs):
         self._ensure_valid()
         return self._session.get(*args, **kwargs)
@@ -101,7 +93,6 @@ class BrainSession:
 
 
 def get_session():
-    """建立连接会话并验证身份（自动每 3.5 小时续期）"""
     return BrainSession()
 
 
@@ -118,7 +109,6 @@ def get_datafields(s, searchScope, dataset_id: str = '', search: str = ''):
             f"&instrumentType={instrument_type}" + \
             f"&region={region}&delay={str(delay)}&universe={universe}&dataset.id={dataset_id}&limit=50" + \
             "&offset={x}"
-        # 只请求一次 offset=0，同时拿 count 和第一页数据
         first_resp = s.get(url_template.format(x=0), timeout=15)
         first_json = first_resp.json()
         count = first_json['count']
@@ -133,15 +123,12 @@ def get_datafields(s, searchScope, dataset_id: str = '', search: str = ''):
         
     datafields_list = []
     for x in range(0, count, 50):
-        # offset=0 已经请求过了，直接复用，不再重复请求
         if x == 0 and first_json is not None:
             payload = first_json
         else:
-            # 遵守限流：每次请求前等待 1.1 秒（API 限制每秒 1 次）
             sleep(1.1)
             url = url_template.format(x=x)
             resp = s.get(url, timeout=15)
-            # 如果被限流 (429)，等待后重试
             if resp.status_code == 429:
                 wait = float(resp.headers.get('Retry-After', 2))
                 print(f"[限流] 等待 {wait}s 后重试 offset={x}")
@@ -160,20 +147,65 @@ def get_datafields(s, searchScope, dataset_id: str = '', search: str = ''):
     print(f"[INFO] 实际获取 {len(datafields_df)} 条 datafields")
     return datafields_df
 
+
 if __name__ == "__main__":
+    print("\n" + "="*60)
+    print("WorldQuant Brain 数据字段获取工具")
+    print("="*60)
+    
+    # 1. 输入数据集 ID
+    print("\n请输入数据集 ID:")
+    print("  常用数据集: news12, fundamental6, option8, model16, etc.")
+    dataset_id = input("数据集 ID: ").strip()
+    if not dataset_id:
+        print("[错误] 数据集 ID 不能为空")
+        exit()
+    
+    # 2. 选择字段类型
+    print("\n请选择字段类型:")
+    print("  [1] MATRIX  - 矩阵类型字段")
+    print("  [2] VECTOR  - 向量类型字段")
+    print("  [3] ALL     - 所有字段")
+    type_choice = input("请输入选项 (1/2/3) [默认: 3]: ").strip()
+    
+    type_map = {'1': 'MATRIX', '2': 'VECTOR', '3': 'ALL', '': 'ALL'}
+    field_type = type_map.get(type_choice, 'ALL')
+    
+    # 3. 确认
+    csv_path = Path(__file__).resolve().parent.parent / 'Data' / f'{dataset_id}_{field_type}.csv'
+    
+    print("\n" + "-"*60)
+    print("配置确认:")
+    print(f"  数据集 ID: {dataset_id}")
+    print(f"  字段类型: {field_type}")
+    print(f"  输出路径: {csv_path}")
+    print("-"*60)
+    
+    confirm = input("\n确认开始获取? (y/n) [默认: y]: ").strip().lower()
+    if confirm and confirm != 'y':
+        print("[取消] 用户取消操作")
+        exit()
+    
+    print("\n" + "="*60)
+    print("开始获取数据...")
+    print("="*60 + "\n")
+    
     sess = get_session()
-
-    dataset = get_datafields(s=sess, searchScope=searchScope, dataset_id=toget_dataset_id)
-    dataset = dataset[dataset['type']=="MATRIX"]
-
-    # 保存筛选后的 DataFrame 到脚本同目录（CSV，带时间戳）
-    out_dir = os.path.dirname(__file__)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    csv_path = os.path.join(out_dir, f"{toget_dataset_id}_datafields_{ts}.csv")
+    
+    dataset = get_datafields(s=sess, searchScope=searchScope, dataset_id=dataset_id)
+    
+    if field_type != 'ALL':
+        before_count = len(dataset)
+        dataset = dataset[dataset['type'] == field_type]
+        after_count = len(dataset)
+        print(f"\n[过滤] 类型={field_type}: {before_count} -> {after_count} 条")
+    
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    
     try:
         dataset.to_csv(csv_path, index=False, encoding='utf-8-sig')
-        print(f"[SAVED] {toget_dataset_id} ({len(dataset)} rows) -> {csv_path}")
+        print(f"\n{'='*60}")
+        print(f"[完成] 已保存 {len(dataset)} 条数据到 {csv_path}")
+        print(f"{'='*60}")
     except Exception as e:
-        print(f"[ERROR] 无法保存文件: {e}")
-
-
+        print(f"[错误] 无法保存文件: {e}")

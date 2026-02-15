@@ -1,83 +1,128 @@
-import pandas as pd
+import json
 from pathlib import Path
+import pandas as pd
 
 
-# =================配置区域=================
-
-DATA_PATH_FUND = Path(__file__).resolve().parent / 'fundamental6_datafields_20260212_145958.csv'
-DATA_PATH_OPT = Path(__file__).resolve().parent / 'option8_datafields_20260213_172143.csv'
-
-SAVED_ALPHAS_PATH_FUND = Path(__file__).resolve().parent / 'alpha_expressions' / 'generated_alphas_fund_4.csv'
-SAVED_ALPHAS_PATH_OPT = Path(__file__).resolve().parent / 'alpha_expressions' / 'generated_alphas_opt_5.csv'
-
-
-# 1. 读取你上传的三个文件
-try:
-    df_fund = pd.read_csv(DATA_PATH_FUND)
-    df_opt = pd.read_csv(DATA_PATH_OPT)
-    print("成功读取数据文件！")
-except FileNotFoundError:
-    print("错误：请确保 CSV 文件在当前目录下。")
-    exit()
-
-
-fund_fields = df_fund['id'].tolist()
-opt_fields = df_opt['id'].tolist()
-
-generated_alphas_fun = []
-
-# --- 生成模板 3：成长动量 (Growth) ---
-print(f"正在生成成长类 Alpha (共 {len(fund_fields)} 个字段)...")
-for field in fund_fields:
-    # 跳过无意义的字段
-    if field in ['assets', 'cap', 'market_cap', 'enterprise_value']:
-        continue
+def generate_alphas(template, data_file, output_file, placeholder='{field}'):
+    """
+    根据模板和数据文件批量生成 alpha 表达式
     
-    # 逻辑：年度增长 (Year-over-Year Growth)
-    # 使用 decay_linear(..., 10) 是为了防止财报数据阶梯状跳变导致 Turnover 过低或过高
-    alpha = f"rank(ts_decay_linear(ts_delta({field}, 252), 10))"
-    generated_alphas_fun.append(alpha)
-
-print(f"\n==========================================")
-print(f"🎉 成功生成 {len(generated_alphas_fun)} 条全新策略！")
-print(f"==========================================\n")
-
-generated_alphas_opt = []
-
-# --- 生成模板 4：期权情绪 (Sentiment) ---
-print("正在生成期权情绪 Alpha...")
-# 定义我们要寻找的时间窗口 (30天, 60天, 90天, 120天...)
-windows = ['30', '60', '90', '120', '150', '180']
-
-for w in windows:
-    # 构造字段名
-    iv_name = f"implied_volatility_call_{w}"
-    hv_name = f"historical_volatility_{w}"
+    Args:
+        template: alpha 表达式模板，如 "rank(ts_decay_linear(ts_delta({field}, 252), 10))"
+        data_file: 数据文件路径，包含 id 字段的 CSV 文件
+        output_file: 输出文件路径
+        placeholder: 占位符，默认为 {field}
     
-    # 只有当两个字段都存在于高覆盖率列表中时，才生成 Alpha
-    if iv_name in opt_fields and hv_name in opt_fields:
-        # 逻辑 A: 差值 (Spread) - 寻找恐慌溢价
-        alpha_diff = f"rank({iv_name} - {hv_name})"
-        generated_alphas_opt.append(alpha_diff)
-        
-        # 逻辑 B: 比率 (Ratio) - 寻找相对恐慌
-        alpha_ratio = f"rank({iv_name} / {hv_name})"
-        generated_alphas_opt.append(alpha_ratio)
+    Returns:
+        生成的 alpha 数量
+    """
+    try:
+        df = pd.read_csv(data_file)
+        if 'id' not in df.columns:
+            print(f"[错误] 数据文件中没有 'id' 列，可用列: {list(df.columns)}")
+            return 0
+        fields = df['id'].dropna().tolist()
+        print(f"[成功] 从 {data_file} 读取了 {len(fields)} 个字段")
+    except FileNotFoundError:
+        print(f"[错误] 数据文件不存在: {data_file}")
+        return 0
+    except Exception as e:
+        print(f"[错误] 读取数据文件失败: {e}")
+        return 0
+    
+    if placeholder not in template:
+        print(f"[错误] 模板中没有找到占位符 '{placeholder}'")
+        print(f"[提示] 请在模板中使用 '{placeholder}' 作为可变字段的位置")
+        return 0
+    
+    alphas = []
+    for field in fields:
+        alpha = template.replace(placeholder, str(field))
+        alphas.append({"expression": alpha})
+    
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(alphas, f, ensure_ascii=False, indent=2)
+    
+    print(f"[保存] 已将 {len(alphas)} 个 alpha 保存到 {output_path}")
+    
+    print(f"\n--- 前 5 条预览 ---")
+    for a in alphas[:5]:
+        print(a['expression'])
+    
+    return len(alphas)
 
-# 3. 输出结果
-print(f"\n==========================================")
-print(f"🎉 成功生成 {len(generated_alphas_opt)} 条全新策略！")
-print(f"==========================================\n")
 
-print("--- 策略预览 (前 10 条) ---")
-for a in generated_alphas_fun[:10]:
-    print(a)
-
-print("\n--- 策略预览 (前 10 条期权类) ---")
-for a in generated_alphas_opt[:10]:
-    print(a)
-
-# 4. (可选) 保存到文件
-pd.DataFrame(generated_alphas_fun, columns=['alpha']).to_csv(SAVED_ALPHAS_PATH_FUND, index=False)
-pd.DataFrame(generated_alphas_opt, columns=['alpha']).to_csv(SAVED_ALPHAS_PATH_OPT, index=False)
-print(f"\n已将生成的 Alpha 策略保存到 '{SAVED_ALPHAS_PATH_FUND}' 和 '{SAVED_ALPHAS_PATH_OPT}' 文件中！")
+if __name__ == "__main__":
+    print("\n" + "="*60)
+    print("Alpha 表达式批量生成工具")
+    print("="*60)
+    
+    # 1. 输入数据文件路径
+    print("\n请输入数据文件路径 (CSV格式，包含 id 列):")
+    print("  示例: ../Data/news12_MATRIX.csv")
+    data_file = input("数据文件路径: ").strip()
+    if not data_file:
+        print("[错误] 数据文件路径不能为空")
+        exit()
+    
+    # 2. 输入 alpha 模板
+    print("\n请输入 Alpha 表达式模板:")
+    print("  使用 {field} 作为可变字段占位符")
+    print("  示例: rank(ts_decay_linear(ts_delta({field}, 252), 10))")
+    template = input("模板: ").strip()
+    if not template:
+        print("[错误] 模板不能为空")
+        exit()
+    
+    # 3. 输入占位符（可选）
+    print("\n请输入占位符 [默认: {field}]:")
+    placeholder = input("占位符: ").strip()
+    if not placeholder:
+        placeholder = '{field}'
+    
+    # 4. 检查占位符是否在模板中
+    if placeholder not in template:
+        print(f"\n[警告] 模板中没有找到占位符 '{placeholder}'")
+        print(f"  模板: {template}")
+        print(f"  占位符: {placeholder}")
+        confirm = input("是否继续? (y/n): ").strip().lower()
+        if confirm != 'y':
+            print("[取消] 用户取消操作")
+            exit()
+    
+    # 5. 自动生成输出文件名
+    data_path = Path(data_file)
+    output_name = data_path.stem + '_alphas.json'
+    output_path = data_path.parent.parent / 'alpha_expressions' / output_name
+    
+    # 6. 确认
+    print("\n" + "-"*60)
+    print("配置确认:")
+    print(f"  数据文件: {data_file}")
+    print(f"  模板: {template}")
+    print(f"  占位符: {placeholder}")
+    print(f"  输出文件: {output_path}")
+    print("-"*60)
+    
+    confirm = input("\n确认开始生成? (y/n) [默认: y]: ").strip().lower()
+    if confirm and confirm != 'y':
+        print("[取消] 用户取消操作")
+        exit()
+    
+    print("\n" + "="*60)
+    print("开始生成 Alpha 表达式...")
+    print("="*60 + "\n")
+    
+    count = generate_alphas(
+        template=template,
+        data_file=data_file,
+        output_file=output_path,
+        placeholder=placeholder
+    )
+    
+    print(f"\n{'='*60}")
+    print(f"完成！共生成 {count} 个 Alpha 表达式")
+    print(f"{'='*60}")
