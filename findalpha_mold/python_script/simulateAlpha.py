@@ -1,12 +1,17 @@
+import queue
+import pandas as pd
 import requests
 import json
 import time
 import os
+import threading
+import traceback
+
 from pathlib import Path
 from datetime import datetime
-
 from requests.auth import HTTPBasicAuth
 from time import sleep
+from threading import Semaphore
 
 
 # =================配置区域=================
@@ -32,6 +37,17 @@ except Exception:
 
 BASE_URL = "https://api.worldquantbrain.com"
 SESSION_TTL = 3.5 * 3600
+
+# =================多线程配置=================
+MAX_CONCURRENT = 2  # 同时回测的最大数量（你的账号限制）
+semaphore = Semaphore(MAX_CONCURRENT)  # PV操作信号量
+
+# 线程安全队列
+task_queue = queue.Queue()  # 存储待查询的alpha任务
+alpha_expression_queue = queue.Queue()  # 存储待提交的alpha表达式
+
+# 线程状态标志
+stop_event = threading.Event()  # 用于优雅停止线程
 
 
 # =================核心函数=================
@@ -127,88 +143,138 @@ def read_alphas(file_path):
     return alpha_list
 
 
-def simulate_alpha(sess, alpha_expressions, saved_path, elite_path):
-    for i, alpha_expression in enumerate(alpha_expressions, 1):
-        print("正在将如下Alpha表达式与setting封装")
-        print(alpha_expression)
-        simulation_data = {
-            'type': 'REGULAR',
-            'settings': {
-                'instrumentType': 'EQUITY',
-                'region': 'USA',
-                'universe': 'TOP3000',
-                'delay': 1,
-                'decay': 0,
-                'neutralization': 'SUBINDUSTRY',
-                'truncation': 0.08,
-                'pasteurization': 'ON',
-                'unitHandling': 'VERIFY',
-                'nanHandling': 'ON',
-                'language': 'FASTEXPR',
-                'visualization': False,
-            },
-            'regular': alpha_expression
-        }
-
-        print(f"\n{'='*60}")
-        print(f"[{i}/{len(alpha_expressions)}] 正在回测: {simulation_data.get('regular', '?')}")
-        print(f"{'='*60}")
-
-        sim_resp = sess.post(
-            'https://api.worldquantbrain.com/simulations',
-            json=simulation_data,
-        )
-
-        print(f"[DEBUG] POST /simulations 状态码: {sim_resp.status_code}")
-        if sim_resp.status_code not in (200, 201):
-            print(f"[错误] 回测请求失败！响应内容:")
-            try:
-                print(json.dumps(sim_resp.json(), indent=2, ensure_ascii=False))
-            except Exception:
-                print(sim_resp.text[:500])
-            sleep(5)
-            continue
-
-        if 'Location' not in sim_resp.headers:
-            print(f"[错误] 响应中没有 Location header!")
-            print(f"[DEBUG] 响应 headers: {dict(sim_resp.headers)}")
-            try:
-                print(f"[DEBUG] 响应 body: {json.dumps(sim_resp.json(), indent=2, ensure_ascii=False)}")
-            except Exception:
-                print(f"[DEBUG] 响应 body: {sim_resp.text[:500]}")
-            sleep(5)
-            continue
-
+# =================== 生产者进程 =====================
+def submit_alpha_thread(sess, saved_path, elite_path):
+    print("[提交线程] 启动")
+    while not stop_event.is_set():
         try:
-            sim_progress_url = sim_resp.headers['Location']
-            print(f"[DEBUG] 轮询地址: {sim_progress_url}")
+            try:
+                alpha_expression = alpha_expression_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            print(f"[提交线程] 准备提交: {alpha_expression[:50]}...")
+
+            # ============ P操作 ================
+            # 申请资源：如果当前已有3个在运行，这里会等待
+            semaphore.acquire()
+            print(f"[提交线程] P操作成功，剩余槽位: {semaphore._value}")
+
+            print("正在将如下Alpha表达式与setting封装")
+            print(alpha_expression)
+            simulation_data = {
+                'type': 'REGULAR',
+                'settings': {
+                    'instrumentType': 'EQUITY',
+                    'region': 'USA',
+                    'universe': 'TOP3000',
+                    'delay': 1,
+                    'decay': 0,
+                    'neutralization': 'SUBINDUSTRY',
+                    'truncation': 0.08,
+                    'pasteurization': 'ON',
+                    'unitHandling': 'VERIFY',
+                    'nanHandling': 'ON',
+                    'language': 'FASTEXPR',
+                    'visualization': False,
+                },
+                'regular': alpha_expression
+            }
+
+            sim_resp = sess.post(
+                'https://api.worldquantbrain.com/simulations',
+                json=simulation_data,
+            )
+
+            print(f"[DEBUG] POST /simulations 状态码: {sim_resp.status_code}")
+            if sim_resp.status_code not in (200, 201):
+                print(f"[错误] 回测请求失败！响应内容:{sim_resp.text[:500]}")
+                semaphore.release()  # 回测失败要释放信号量
+                alpha_expression_queue.task_done()  # 标记任务完成
+                continue
+
+            if 'Location' not in sim_resp.headers:
+                print(f"[错误] 响应中没有 Location header!")
+                print(f"[DEBUG] 响应 headers: {dict(sim_resp.headers)}")
+                semaphore.release()  # 回测失败要释放信号量
+                alpha_expression_queue.task_done()  # 标记任务完成
+                try:
+                    print(f"[DEBUG] 响应 body: {json.dumps(sim_resp.json(), indent=2, ensure_ascii=False)}")
+                except Exception:
+                    print(f"[DEBUG] 响应 body: {sim_resp.text[:500]}")
+                sleep(5)
+                continue
+
+            # 加入任务
+            task_queue.put({
+                'alpha_expression': alpha_expression,
+                'sim_progress_url': sim_resp.headers['Location'],
+                "saved_path": saved_path,
+                "elite_path": elite_path
+            })
+            
+            # 标记表达式队列任务完成
+            alpha_expression_queue.task_done()
+            
+        except Exception as e:
+            print(f"[错误] 提交 Alpha 表达式失败: {e}")
+            traceback.print_exc()
+            try:
+                semaphore.release()  # 回测失败要释放信号量
+            except :
+                pass
+
+
+# =================== 消费者进程 =====================
+def get_result_thread(sess):
+    print("[获取结果线程] 启动")
+    while not stop_event.is_set():
+        try:
+            try:
+                task = task_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            print(f"[获取结果线程] 准备获取: {task['alpha_expression'][:50]}...")
+
+            sim_progress_url = task['sim_progress_url']
+            alpha_expression = task['alpha_expression']
+            saved_path = task['saved_path']
+            elite_path = task['elite_path']
+
+            print(f"[结果线程] 开始处理: {alpha_expression[:50]}...")
+            
+            # ================== 轮询等待回测完成 ==================
+            # 这部分代码从原simulate_alpha函数复制（第185-192行）
             while True:
                 sim_progress_resp = sess.get(sim_progress_url)
                 retry_after_sec = float(sim_progress_resp.headers.get("Retry-After", 0))
                 if retry_after_sec == 0:
                     break
-                print(f"\r[等待] 回测进行中... 等待 {retry_after_sec} 秒", end='', flush=True)
-                sleep(retry_after_sec)
+                print(f"\r[结果线程] 等待中... {retry_after_sec}秒", end='', flush=True)
+                import time
+                time.sleep(retry_after_sec)
             print()
-
+            
+            # ================== 处理结果 ==================
+            # 这部分代码从原simulate_alpha函数复制（第194-252行）
             sim_result = sim_progress_resp.json()
             sim_status = sim_result.get("status", "UNKNOWN")
-            print(f"[DEBUG] 回测完成，status={sim_status}，keys: {list(sim_result.keys())}")
-
+            
             if sim_status == "ERROR":
-                print(f"[错误] 回测失败！status=ERROR，完整响应:")
-                print(json.dumps(sim_result, indent=2, ensure_ascii=False))
-                sleep(2)
+                print(f"[结果线程] 回测失败: status=ERROR")
+                task_queue.task_done()
+                semaphore.release()  # ================== V操作 ==================
                 continue
-
+            
             if "alpha" not in sim_result:
-                print(f"[错误] 回测完成但响应中没有 'alpha' 字段:")
-                print(json.dumps(sim_result, indent=2, ensure_ascii=False))
+                print(f"[结果线程] 响应中没有alpha字段")
+                task_queue.task_done()
+                semaphore.release()  # ================== V操作 ==================
                 continue
-
+            
             alpha_id = sim_result["alpha"]
-            print(f"[成功] Alpha ID: {alpha_id}")
-
+            print(f"[结果线程] Alpha ID: {alpha_id}")
+            
+            # 获取详细信息
             sharpe = None
             fitness = None
             returns_ = None
@@ -221,10 +287,10 @@ def simulate_alpha(sess, alpha_expressions, saved_path, elite_path):
                 fitness = is_data.get("fitness")
                 returns_ = is_data.get("returns")
                 turnover = is_data.get("turnover")
-                print(f"[验证] 平台确认存在 | Sharpe={sharpe} | Fitness={fitness} | Returns={returns_} | Turnover={turnover}")
-            else:
-                print(f"[警告] GET /alphas/{alpha_id} 返回 {verify_resp.status_code}: {verify_resp.text[:200]}")
-
+                print(f"[结果线程] 验证成功 | Sharpe={sharpe} | Fitness={fitness}")
+            
+            # 保存结果
+            from datetime import datetime
             ts = datetime.now(datetime.UTC).isoformat() if hasattr(datetime, 'UTC') else datetime.utcnow().isoformat() + 'Z'
             record = {
                 'alpha_id': alpha_id,
@@ -239,23 +305,37 @@ def simulate_alpha(sess, alpha_expressions, saved_path, elite_path):
             saved_path.parent.mkdir(parents=True, exist_ok=True)
             with open(saved_path, 'a', encoding='utf-8') as fout:
                 fout.write(json.dumps(record, ensure_ascii=False) + '\n')
-            print(f"[保存] 已将 alpha 保存到 {saved_path}")
-
+            print(f"[结果线程] 已保存到 {saved_path}")
+            
+            # 保存精英alpha
             if sharpe is not None and fitness is not None and sharpe > 1.25 and fitness > 1:
                 elite_path.parent.mkdir(parents=True, exist_ok=True)
                 if not elite_path.exists():
                     with open(elite_path, 'w', encoding='utf-8') as fout:
                         fout.write(json.dumps({"submitted": 0}, ensure_ascii=False) + '\n')
-                    print(f"[初始化] 创建精英文件并写入元数据: {elite_path}")
                 with open(elite_path, 'a', encoding='utf-8') as fout:
                     fout.write(json.dumps(record, ensure_ascii=False) + '\n')
-                print(f"[精选] Sharpe={sharpe}, Fitness={fitness} >>> 已额外保存到 {elite_path}")
+                print(f"[结果线程] 精选保存到 {elite_path}")
+
+            # ================== V操作 ==================
+            # 释放资源：让下一个alpha可以提交
+            semaphore.release()
+            print(f"[结果线程] V操作成功，剩余槽位: {semaphore._value}")
+            task_queue.task_done()
 
         except Exception as e:
-            print(f"[异常] 回测过程出错: {type(e).__name__}: {e}")
+            print(f"[结果线程] 异常: {e}")
             import traceback
             traceback.print_exc()
-            sleep(10)
+            # 确保发生异常时也释放信号量
+            try:
+                semaphore.release()
+            except:
+                pass
+            try:
+                task_queue.task_done()
+            except:
+                pass
 
 
 if __name__ == "__main__":
@@ -316,12 +396,64 @@ if __name__ == "__main__":
         print("[错误] 没有找到任何 Alpha 表达式，请检查文件路径")
         exit()
     
-    # 6. 开始回测
-    print("\n" + "="*60)
-    print("开始批量回测...")
-    print("="*60 + "\n")
+    # 6. 填充alpha表达式队列
+    for alpha in alphas:
+        alpha_expression_queue.put(alpha)
     
-    simulate_alpha(sess, alphas, saved_path, elite_path)
+    # 7. 创建并启动线程
+    print("\n" + "="*60)
+    print("启动双线程回测系统...")
+    print("="*60 + "\n")
+
+    thread1 = threading.Thread(target=submit_alpha_thread, args=(sess, saved_path, elite_path), name='SubmitThread')
+    thread2 = threading.Thread(target=get_result_thread, args=(sess,), name='ResultThread')
+
+    thread1.start()
+    thread2.start()
+
+    try:
+        # 8. 等待所有Alpha提交完成（可中断版本）
+        print("\n[主线程] 等待所有Alpha提交...")
+        while alpha_expression_queue.unfinished_tasks > 0 and not stop_event.is_set():
+            sleep(0.5)
+        
+        if not stop_event.is_set():
+            print("\n[主线程] 所有Alpha已提交完毕")
+
+            # 9. 等待所有结果获取完成（可中断版本）
+            print("[主线程] 等待所有结果处理...")
+            while task_queue.unfinished_tasks > 0 and not stop_event.is_set():
+                sleep(0.5)
+            
+            if not stop_event.is_set():
+                print("[主线程] 所有结果已处理完毕")
+
+    except KeyboardInterrupt:
+        print("\n\n" + "="*60)
+        print("[用户中断] 收到 Ctrl+C，正在停止所有线程...")
+        print("="*60 + "\n")
+        
+        # 设置停止标志，通知线程退出
+        stop_event.set()
+        
+        # 释放所有信号量，避免死锁
+        for _ in range(MAX_CONCURRENT):
+            try:
+                semaphore.release()
+            except:
+                pass
+        
+        # 等待线程结束（设置超时，避免永久等待）
+        thread1.join(timeout=5)
+        thread2.join(timeout=5)
+        
+        print("\n[主线程] 所有线程已停止，程序退出")
+        exit(0)
+
+    # 10. 正常停止线程
+    stop_event.set()
+    thread1.join()
+    thread2.join()
     
     print("\n" + "="*60)
     print("所有回测任务完成！")
