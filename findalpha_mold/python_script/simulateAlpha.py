@@ -138,6 +138,85 @@ previous_simulated_count = 0  # 之前已回测的数量
 current_success_count = 0  # 本次成功回测的数量
 count_lock = threading.Lock()  # 计数器的线程锁
 
+# =================CSV保存配置=================
+csv_lock = threading.Lock()  # CSV写入的线程锁
+
+
+def init_csv_file(csv_path):
+    """初始化CSV文件，如果不存在则创建并写入表头"""
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    if not csv_path.exists():
+        headers = [
+            'alpha_id', 'expression', 'pnl', 'bookSize', 'longCount', 
+            'shortCount', 'turnover', 'returns', 'drawdown', 'margin', 
+            'sharpe', 'fitness', 'startDate',
+            'check_LOW_SHARPE', 'check_LOW_FITNESS', 'check_LOW_TURNOVER',
+            'check_HIGH_TURNOVER', 'check_CONCENTRATED_WEIGHT',
+            'check_LOW_SUB_UNIVERSE_SHARPE', 'check_SELF_CORRELATION',
+            'check_MATCHES_COMPETITION', 'saved_time'
+        ]
+        
+        with open(csv_path, 'w', encoding='utf-8-sig', newline='') as f:
+            import csv
+            writer = csv.writer(f)
+            writer.writerow(headers)
+        logger.info(f"CSV文件已初始化: {csv_path}")
+
+
+def save_to_csv(csv_path, alpha_id, alpha_expression, is_data, checks):
+    """将Alpha信息保存到CSV文件（线程安全）"""
+    from datetime import datetime
+    
+    # 提取检查结果
+    check_results = {}
+    check_names = [
+        'LOW_SHARPE', 'LOW_FITNESS', 'LOW_TURNOVER', 'HIGH_TURNOVER',
+        'CONCENTRATED_WEIGHT', 'LOW_SUB_UNIVERSE_SHARPE',
+        'SELF_CORRELATION', 'MATCHES_COMPETITION'
+    ]
+    
+    for check_name in check_names:
+        check_results[f'check_{check_name}'] = 'UNKNOWN'
+    
+    for check in checks:
+        name = check.get('name', '')
+        if name in check_names:
+            check_results[f'check_{name}'] = check.get('result', 'UNKNOWN')
+    
+    # 构建行数据
+    row_data = [
+        alpha_id,
+        alpha_expression,
+        is_data.get('pnl', ''),
+        is_data.get('bookSize', ''),
+        is_data.get('longCount', ''),
+        is_data.get('shortCount', ''),
+        is_data.get('turnover', ''),
+        is_data.get('returns', ''),
+        is_data.get('drawdown', ''),
+        is_data.get('margin', ''),
+        is_data.get('sharpe', ''),
+        is_data.get('fitness', ''),
+        is_data.get('startDate', ''),
+        check_results['check_LOW_SHARPE'],
+        check_results['check_LOW_FITNESS'],
+        check_results['check_LOW_TURNOVER'],
+        check_results['check_HIGH_TURNOVER'],
+        check_results['check_CONCENTRATED_WEIGHT'],
+        check_results['check_LOW_SUB_UNIVERSE_SHARPE'],
+        check_results['check_SELF_CORRELATION'],
+        check_results['check_MATCHES_COMPETITION'],
+        datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    ]
+    
+    # 线程安全写入
+    with csv_lock:
+        import csv
+        with open(csv_path, 'a', encoding='utf-8-sig', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(row_data)
+
 
 # =================核心函数=================
 
@@ -559,8 +638,11 @@ def get_result_thread(sess):
                 break
             
             # 保存结果
-            from datetime import datetime
-            ts = datetime.now(datetime.UTC).isoformat() if hasattr(datetime, 'UTC') else datetime.utcnow().isoformat() + 'Z'
+            from datetime import datetime, timezone
+            if hasattr(datetime, 'UTC'):
+                ts = datetime.now(datetime.UTC).isoformat()
+            else:
+                ts = datetime.now(timezone.utc).isoformat()
             record = {
                 'alpha_id': alpha_id,
                 'expression': alpha_expression,
@@ -575,6 +657,12 @@ def get_result_thread(sess):
             with open(saved_path, 'a', encoding='utf-8') as fout:
                 fout.write(json.dumps(record, ensure_ascii=False) + '\n')
             logger.info(f"已保存到 {saved_path}")
+            
+            # 保存到CSV
+            csv_path = Path(saved_path).parent / 'alphas_detailed.csv'
+            checks = is_data.get('checks', [])
+            save_to_csv(csv_path, alpha_id, alpha_expression, is_data, checks)
+            logger.info(f"已保存到CSV: {csv_path}")
             
             # 保存精英alpha
             if sharpe is not None and fitness is not None and sharpe > 1.25 and fitness > 1:
@@ -631,7 +719,11 @@ if __name__ == "__main__":
     # 2. 自动生成输出目录
     output_dir = input_path.parent.parent / 'alpha_result' / input_path.stem.replace('_alphas', '')
     
-    # 3. 确认
+    # 3. 初始化CSV文件
+    csv_path = output_dir / 'alphas_detailed.csv'
+    init_csv_file(csv_path)
+    
+    # 4. 确认
     saved_path = output_dir / 'saved_alphas.jsonl'
     elite_path = output_dir / 'elite_alphas.jsonl'
     
@@ -640,6 +732,7 @@ if __name__ == "__main__":
     print(f"  输入文件: {input_path}")
     print(f"  输出目录: {output_dir}")
     print(f"  普通结果: {saved_path}")
+    print(f"  详细CSV: {csv_path}")
     print(f"  精选结果: {elite_path}")
     print("-"*60)
     
