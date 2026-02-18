@@ -7,6 +7,12 @@ findalpha_mold/python_script/brain_credentials.json
 # result
 findalpha_mold/alpha_result/
 
+# study
+findalpha_mold/study/
+
+# log
+findalpha_mold/alpha_log/
+
 # alpha_expression
 findalpha_mold/alpha_expressions/
 
