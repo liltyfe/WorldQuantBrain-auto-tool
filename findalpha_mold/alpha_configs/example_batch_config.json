@@ -1,0 +1,26 @@
+{
+  "name": "第三讲课堂配置模板",
+  "description": "零基础第三讲课上的批量生成Alpha配置模板",
+  
+  "output": {
+    "file": "../alpha_expressions/2026—2-18.json"
+  },
+  
+  "templates": [
+    {
+      "name": "group_rank_ts_rank",
+      "template": "{group_op}({ts_op}({field}, {days}), {group})",
+      "params": {
+        "group_op": ["group_rank", "group_zscore", "group_neutralize"],
+        "ts_op": ["ts_rank", "ts_zscore", "ts_delta"],
+        "field": "fundamental6_datafields",
+        "days": [60, 200],
+        "group": ["market", "industry", "subindustry", "sector", "densify(pv13_h_f1_sector)"]
+      }
+    }
+  ],
+  
+  "data_files": {
+    "fundamental6_datafields": "../Data/fundamental6.csv"
+  }
+}
