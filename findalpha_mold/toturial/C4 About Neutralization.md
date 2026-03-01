@@ -1,22 +1,22 @@
 # About Neutralization
 
-🎯 What is Neutralization?
+### 🎯 What is Neutralization?
 
 **Neutralization** is a technique to obtain pure Alpha performance by removing or minimizing the influence of specific factors. Through neutralization, you can reduce (or remove) unwanted factor influences in a specific Alpha. Typically, but not always, applying neutralization increases the **Sharpe ratio** while reducing **returns or margins**.
 
 In BRAIN, you can implement neutralization through **Group Neutralize** operator.
 
-🤝 Group Neutralize
+### 🤝 Group Neutralize
 
 **Group neutralization** standardizes values only within defined groups. The most representative example is industry-based neutralization available in Settings. By dividing into industry groups and standardizing within them, you can neutralize industry-based Alpha performance in your simulation.
 
 Beyond industry neutralization in Settings, BRAIN allows group neutralization using various **group data** and the **group_neutralize operator**.
 
-🗂️ Group Datafields
+### 🗂️ Group Datafields
 
 The second input of **group_neutralize(x,group)** allows you to input group data. Group data fields are data that classify each instrument based on specific criteria. You can use various data fields, including **sector**, **industry**, and **subindustry**, which can be found in the settings, as well as additional datafields like **exchange**. You can find many group datafields in [Price Volume Data for Equity](https://platform.worldquantbrain.com/data/data-sets/pv1?delay=1&instrumentType=EQUITY&limit=20&offset=0&region=USA&universe=TOP3000) and [Relationship Data for Equity](https://platform.worldquantbrain.com/data/data-sets/pv13?delay=1&instrumentType=EQUITY&limit=20&offset=0&region=USA&universe=TOP3000), so take a look for useful datafields that suit your needs.
 
-🛒 Bucket() Operator
+### 🛒 Bucket() Operator
 
 If there's no suitable existing group for your idea, you can create your own using the **bucket operator** as shown below:
 
@@ -24,11 +24,11 @@ If there's no suitable existing group for your idea, you can create your own usi
 
 For example, if you want to divide into 10 groups based on market capitalization size, you can create group variables using **bucket(rank(cap),range="0,1,0.1")** which creates 10 groups from 0~0.1, 0.1~0.2, …, 0.9~1.0 based on rank(cap) values.
 
-🛠️ Densify() Operator
+### 🛠️ Densify() Operator
 
 When using group datafields, you may encounter situations where excessive computation leads to simulation failures. This can happen when the values of the group datafields are **sparsely distributed**, making the computation inefficient. In such cases, applying **densify(x) operator** to the group datafields can help resolve the issue. More detailed information can be found in the description of densify(x) in the [Operator Explorer](https://platform.worldquantbrain.com/learn/operators/detailed-operator-descriptions).
 
-🔥 Let's try it out!
+### 🔥 Let's try it out!
 
 Let's create an Alpha that group-neutralizes the difference between put and call option implied volatility. First, let's assign the following formula to iv_difference:
 

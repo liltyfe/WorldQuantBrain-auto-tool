@@ -52,11 +52,23 @@ def setup_logging():
     if logger.handlers:
         logger.handlers.clear()
     
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    # 禁用 urllib3 和 requests 的 DEBUG 日志（占用大量空间）
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('requests').setLevel(logging.WARNING)
+    
+    # 文件日志处理器 - DEBUG 级别，记录所有信息
+    from logging.handlers import RotatingFileHandler
+    file_handler = RotatingFileHandler(
+        log_file, 
+        encoding='utf-8',
+        maxBytes=100*1024*1024,  # 100MB
+        backupCount=10  # 保留 10 个备份
+    )
     file_handler.setLevel(logging.DEBUG)
     
+    # 控制台日志处理器 - DEBUG 级别，显示所有信息
     _refresh_line_handler = RefreshLineHandler()
-    _refresh_line_handler.setLevel(logging.INFO)
+    _refresh_line_handler.setLevel(logging.DEBUG)
     
     formatter = logging.Formatter(
         '%(asctime)s [%(threadName)s] %(levelname)s - %(message)s',
@@ -137,6 +149,8 @@ input_json_path = None  # 输入的 JSON 文件路径
 previous_simulated_count = 0  # 之前已回测的数量
 current_success_count = 0  # 本次成功回测的数量
 count_lock = threading.Lock()  # 计数器的线程锁
+last_save_time = 0  # 上次保存进度的时间戳
+SAVE_INTERVAL = 300  # 每 300 秒（5分钟）保存一次进度
 
 # =================CSV保存配置=================
 csv_lock = threading.Lock()  # CSV写入的线程锁
@@ -331,13 +345,6 @@ def read_alphas(file_path):
     return alpha_list
 
 
-def increment_success_count():
-    """增加成功回测计数器（线程安全）"""
-    global current_success_count
-    with count_lock:
-        current_success_count += 1
-
-
 def update_simulated_count():
     """更新并写回统计信息到 JSON 文件"""
     global input_json_path, previous_simulated_count, current_success_count
@@ -377,13 +384,26 @@ def update_simulated_count():
         logger.error(traceback.format_exc())
 
 
+def increment_success_count():
+    """增加成功回测计数器（线程安全），定期保存进度"""
+    global current_success_count, last_save_time
+    with count_lock:
+        current_success_count += 1
+        
+        # 检查是否需要定期保存进度
+        current_time = time.time()
+        if current_time - last_save_time >= SAVE_INTERVAL:
+            last_save_time = current_time
+            logger.debug(f"定期保存进度... 本次成功: {current_success_count}")
+            update_simulated_count()
+
 # =================== 生产者进程 =====================
 def submit_alpha_thread(sess, saved_path, elite_path):
     logger.info("启动")
     while not stop_event.is_set():
         try:
             try:
-                alpha_expression = alpha_expression_queue.get(timeout=1)
+                idx, alpha_expression = alpha_expression_queue.get(timeout=1)
             except queue.Empty:
                 continue
             
@@ -392,19 +412,25 @@ def submit_alpha_thread(sess, saved_path, elite_path):
                 alpha_expression_queue.task_done()
                 break
             
-            logger.debug(f"准备提交: {alpha_expression[:50]}...")
+            logger.debug(f"准备提交 [序号 {idx}]: {alpha_expression}")
 
             # ============ P操作 ================
             # 申请资源：如果当前已有3个在运行，这里会等待
-            # 带超时的 acquire，避免永久阻塞
-            acquired = semaphore.acquire(timeout=1)
-            if not acquired:
-                if stop_event.is_set():
-                    alpha_expression_queue.task_done()
-                    break
-                continue
+            # 不带超时，因为我们需要等待槽位释放，不跳过任何 Alpha
+            # 但会定期检查 stop_event，确保可以响应停止信号
+            while not stop_event.is_set():
+                try:
+                    acquired = semaphore.acquire(timeout=1)
+                    if acquired:
+                        break
+                except:
+                    pass
+            
+            if stop_event.is_set():
+                alpha_expression_queue.task_done()
+                break
                 
-            logger.debug(f"P操作成功，剩余槽位: {semaphore._value}")
+            logger.debug(f"P操作成功 [序号 {idx}]，剩余槽位: {semaphore._value}")
 
             # 再次检查停止标志
             if stop_event.is_set():
@@ -471,6 +497,7 @@ def submit_alpha_thread(sess, saved_path, elite_path):
 
             # 加入任务
             task_queue.put({
+                'idx': idx,
                 'alpha_expression': alpha_expression,
                 'sim_progress_url': sim_resp.headers['Location'],
                 "saved_path": saved_path,
@@ -506,21 +533,23 @@ def get_result_thread(sess):
                 task_queue.task_done()
                 break
             
-            logger.debug(f"准备获取: {task['alpha_expression'][:50]}")
+            idx = task['idx']
+            logger.debug(f"准备获取 [序号 {idx}]: {task['alpha_expression']}")
 
             sim_progress_url = task['sim_progress_url']
             alpha_expression = task['alpha_expression']
             saved_path = task['saved_path']
             elite_path = task['elite_path']
 
-            logger.debug(f"开始处理: {alpha_expression[:50]}...")
+            logger.debug(f"开始处理 [序号 {idx}]: {alpha_expression}")
             
             # ================== 轮询等待回测完成 ==================
             # 这部分代码从原simulate_alpha函数复制（第185-192行）
             total_wait_sec = 0.0
-            first_wait = True
             import sys
             from datetime import datetime
+            MAX_WAIT_SEC = 1800  # 最大等待 30 分钟，超时则跳过
+            timed_out = False  # 标记是否超时
             
             while True:
                 # 检查停止标志
@@ -541,12 +570,17 @@ def get_result_thread(sess):
                 
                 total_wait_sec += retry_after_sec
                 
-                # 记录到日志文件
-                if first_wait:
-                    logger.info(f"等待中... 累计 {total_wait_sec:.1f}秒")
-                    first_wait = False
-                else:
-                    logger.debug(f"等待中... 本次 {retry_after_sec}秒, 累计 {total_wait_sec:.1f}秒")
+                # 检查是否超时
+                if total_wait_sec > MAX_WAIT_SEC:
+                    logger.error(f"回测超时 [序号 {idx}]！已等待 {total_wait_sec:.1f} 秒，超过最大 {MAX_WAIT_SEC} 秒，跳过此 Alpha")
+                    set_refresh_line_active(False)
+                    task_queue.task_done()
+                    try:
+                        semaphore.release()
+                    except:
+                        pass
+                    timed_out = True
+                    break
                 
                 # 标记有活跃的刷新行
                 set_refresh_line_active(True)
@@ -573,14 +607,18 @@ def get_result_thread(sess):
                         pass
                     break
             
-            # ================== 处理结果 ==================
-            # 这部分代码从原simulate_alpha函数复制（第194-252行）
-            
             # 清除刷新行状态
             set_refresh_line_active(False)
             
-            # 如果因为停止标志而退出，跳过后续处理
-            if stop_event.is_set():
+            # 记录最终累计等待时间到日志
+            if total_wait_sec > 0:
+                logger.info(f"等待完成 [序号 {idx}]，累计等待 {total_wait_sec:.1f}秒")
+            
+            # ================== 处理结果 ==================
+            # 这部分代码从原simulate_alpha函数复制（第194-252行）
+            
+            # 如果因为停止标志或超时退出，跳过后续处理
+            if stop_event.is_set() or timed_out:
                 break
             
             sim_result = sim_progress_resp.json()
@@ -753,13 +791,16 @@ if __name__ == "__main__":
     
     logger.info(f"共加载 {len(alphas)} 个 Alpha 表达式")
     
+    # 初始化上次保存时间
+    last_save_time = time.time()
+    
     if len(alphas) == 0:
         logger.error("没有找到任何 Alpha 表达式，请检查文件路径")
         exit()
     
-    # 6. 填充alpha表达式队列
-    for alpha in alphas:
-        alpha_expression_queue.put(alpha)
+    # 6. 填充alpha表达式队列（包含原始序号）
+    for idx, alpha in enumerate(alphas):
+        alpha_expression_queue.put((idx, alpha))
     
     # 7. 创建并启动线程
     log_separator("启动双线程回测系统...")
