@@ -1,43 +1,63 @@
 # WorldQuant Brain Python Toolkit
 
-用于 WorldQuant Brain 平台的 Alpha 策略搜索、回测和提交工具集。
+Lightweight Python scripts for fetching data fields, generating alpha expressions,
+running simulations, and submitting selected alphas to WorldQuant Brain.
 
-## 功能特性
+## What This Repo Contains
 
-- **自动搜索 Alpha**：基于 fundamental6 数据集自动生成并回测 Alpha 策略
-- **批量提交**：支持批量提交高质量的 Alpha 到 WorldQuant Brain 平台
-- **单 Alpha 操作**：支持单个 Alpha 的回测和提交
-- **自动续期**：会话自动续期机制，避免长时间运行中断
-- **结果管理**：自动保存回测结果，区分普通 Alpha 和高质量 Alpha
+This project is script-first (interactive CLI style), centered on:
 
-## 项目结构
+- `findalpha_mold/python_script/getdata.py` - fetch data fields to CSV
+- `findalpha_mold/python_script/generate_alphas.py` - generate alphas from one template
+- `findalpha_mold/python_script/generate_alphas_batch.py` - batch generation from JSON config
+- `findalpha_mold/python_script/simulateAlpha.py` - run alpha simulations and save results
+- `findalpha_mold/python_script/submitAlpha.py` - submit selected alphas
 
-```
+## Repository Layout
+
+```text
 findalpha_mold/
-├── alpha_result/
-├── brain_credentials.json        # API 凭证（已排除在版本控制外）
-├── findAlpha.py                  # 自动搜索和回测 Alpha
-├── submitAlpha.py                # 批量提交 Alpha
-├── link.py                       # 单个 Alpha 操作
-└── test_submitAlpha.py           # 测试脚本
+  Data/                       # input data field CSV files
+  alpha_configs/              # batch generation configs
+  alpha_expressions/          # generated alpha expression files (runtime output)
+  alpha_log/                  # simulation logs (runtime output)
+  alpha_result/               # simulation/submission outputs (runtime output)
+  python_script/              # core scripts
 ```
 
-## 安装依赖
+## Requirements
+
+- Python 3.10+ (3.11+ recommended)
+- Packages:
+  - `requests`
+  - `pandas`
+
+Install:
 
 ```bash
-pip install requests pandas
+python -m venv .venv
+.venv\Scripts\activate
+python -m pip install --upgrade pip
+python -m pip install requests pandas
 ```
 
-## 配置
+Optional dev tools:
 
-1. 在项目目录下创建 `brain_credentials.json` 文件
-2. 填入你的 WorldQuant Brain API 凭证：
+```bash
+python -m pip install pytest ruff
+```
+
+## Credentials Setup
+
+Create `findalpha_mold/python_script/brain_credentials.json`.
+
+Supported formats:
 
 ```json
-["your_api_key", "your_api_secret"]
+["API_KEY", "API_SECRET"]
 ```
 
-或使用对象格式：
+or
 
 ```json
 {
@@ -46,133 +66,94 @@ pip install requests pandas
 }
 ```
 
-**注意**：`brain_credentials.json` 已在 `.gitignore` 中，不会被提交到版本控制系统。
+Do not commit this file.
 
-## 使用方法
+## Typical Workflow
 
-### 1. 自动搜索 Alpha
+Run scripts from `findalpha_mold/python_script/`.
 
-运行 `findAlpha.py` 自动搜索和回测 Alpha：
+### 1) Fetch data fields
 
 ```bash
-python findAlpha.py
+python getdata.py
 ```
 
-该脚本会：
-- 获取 fundamental6 数据集的所有数据字段
-- 为每个数据字段生成正负两个 Alpha 表达式
-- 逐个回测并保存结果
-- 高质量 Alpha（Sharpe > 1.25 且 Fitness > 1）会额外保存到 `elite_alphas.jsonl`
+Prompts guide dataset id and field type; output CSV lands in `findalpha_mold/Data/`.
 
-### 2. 批量提交 Alpha
+### 2) Generate alpha expressions
 
-运行 `submitAlpha.py` 批量提交高质量的 Alpha：
+Single-template mode:
+
+```bash
+python generate_alphas.py
+```
+
+Batch config mode:
+
+```bash
+python generate_alphas_batch.py
+```
+
+### 3) Simulate generated alphas
+
+```bash
+python simulateAlpha.py
+```
+
+Outputs include:
+
+- `saved_alphas.jsonl`
+- `elite_alphas.jsonl` (filtered high-quality alphas)
+- `alphas_detailed.csv`
+- daily log file in `findalpha_mold/alpha_log/`
+
+### 4) Submit selected elite alphas
 
 ```bash
 python submitAlpha.py
 ```
 
-该脚本会：
-- 从 `elite_alphas.jsonl` 读取 Alpha
-- 跳过已提交的 Alpha
-- 提交指定数量的 Alpha（默认为 1，可在代码中修改 `submit_count`）
-- 更新已提交数量到文件
+## Validation Commands
 
-### 3. 单个 Alpha 操作
-
-运行 `link.py` 进行单个 Alpha 的回测和提交：
+Build/smoke check:
 
 ```bash
-python link.py
+python -m compileall findalpha_mold/python_script
 ```
 
-修改 `my_alpha` 变量来测试不同的 Alpha 表达式。
-
-### 4. 运行测试
-
-运行测试脚本验证 `submitAlpha.py` 的逻辑：
+Lint (if ruff installed):
 
 ```bash
-python test_submitAlpha.py
+ruff check findalpha_mold/python_script
+ruff format --check findalpha_mold/python_script
 ```
 
-## API 限制
+Tests (if/when added):
 
-- 请求频率限制：每秒 1 次
-- 会话有效期：4 小时（脚本会在 3.5 小时时自动续期）
-- 回测时间：根据 Alpha 复杂度，通常需要数秒到数分钟
-
-## 回测参数
-
-默认回测设置：
-
-| 参数 | 值 | 说明 |
-|------|-----|------|
-| instrumentType | EQUITY | 股票 |
-| region | USA | 美国市场 |
-| universe | TOP3000 | 前 3000 只股票 |
-| delay | 1 | 延迟 1 天 |
-| decay | 0 | 无衰减 |
-| neutralization | SUBINDUSTRY | 子行业中性化 |
-| truncation | 0.08 | 截断 8% |
-| pasteurization | ON | 开启巴氏消毒 |
-| unitHandling | VERIFY | 单位验证 |
-| nanHandling | ON | 处理缺失值 |
-| language | FASTEXPR | 快速表达式 |
-
-## 输出文件格式
-
-### saved_alphas.jsonl
-
-每行一个 JSON 对象，包含：
-
-```json
-{
-  "alpha_id": "alpha_id",
-  "expression": "alpha_expression",
-  "sharpe": 1.5,
-  "fitness": 1.2,
-  "returns": 0.1,
-  "turnover": 0.05,
-  "timestamp": "2024-01-01T00:00:00Z"
-}
+```bash
+python -m pytest
+python -m pytest path/to/test_file.py
+python -m pytest path/to/test_file.py::test_name
+python -m pytest path/to/test_file.py::TestClass::test_method
 ```
 
-### elite_alphas.jsonl
+## Notes
 
-格式与 `saved_alphas.jsonl` 相同，但第一行包含元数据：
+- API calls can be rate-limited; scripts handle retry headers where implemented.
+- Session refresh is built into scripts that run for longer periods.
+- Generated runtime data folders are git-ignored by default.
 
-```json
-{"submited": 3}
-```
+## Troubleshooting
 
-表示已提交了 3 个 Alpha。
+- Login fails: verify `brain_credentials.json` path and JSON format.
+- Missing data columns: ensure CSV contains expected columns (for example `id`).
+- No alphas to submit: confirm `elite_alphas.jsonl` exists and includes records.
 
-## 安全注意事项
+## Safety
 
-- **不要**将 `brain_credentials.json` 提交到版本控制系统
-- 建议使用私有仓库托管代码
-- 定期更换 API 密钥
-- 提交 Alpha 前仔细检查策略表现
+- Never commit API keys, secrets, or raw sensitive responses.
+- Review alpha performance metrics before submission.
 
-## 故障排除
+## License
 
-### 登录失败
-
-检查 `brain_credentials.json` 文件格式是否正确。
-
-### 请求被限流
-
-脚本已自动处理 429 错误，会等待 `Retry-After` 时间后重试。
-
-### 会话过期
-
-脚本会在 3.5 小时时自动续期，无需手动干预。
-
-## 许可证
-
-本项目仅供学习和研究使用。
-
-## 联系方式
-
-如有问题或建议，请提交 Issue。
+For learning and research use.

@@ -51,3 +51,10 @@ wheels/
 # OS
 .DS_Store
 Thumbs.db
+
+# Windows reserved device filename accidentally tracked in repo
+nul
+NUL
+
+# Agent instructions file (local-only)
+AGENTS.md
