@@ -125,6 +125,8 @@ try:
             API_SECRET = creds.get("API_SECRET") or creds.get("api_secret")
         else:
             raise ValueError("凭据文件格式不正确，请使用 ['API_KEY','API_SECRET'] 或 {API_KEY:..., API_SECRET:...}")
+    if not API_KEY or not API_SECRET:
+        raise ValueError("凭据文件缺少 API_KEY 或 API_SECRET")
 except FileNotFoundError:
     raise FileNotFoundError(f"找不到凭据文件: {creds_path}. 请创建包含 [\"API_KEY\", \"API_SECRET\"] 的 JSON 文件，或直接在代码中设置 API_KEY/API_SECRET。")
 except Exception:
@@ -132,6 +134,12 @@ except Exception:
 
 BASE_URL = "https://api.worldquantbrain.com"
 SESSION_TTL = 3.5 * 3600
+REQUEST_TIMEOUT = 30
+REQUEST_RETRIES = 3
+REQUEST_RETRY_SLEEP = 3
+RESULT_JSON_RETRIES = 3
+RESULT_JSON_RETRY_SLEEP = 2
+SUBMIT_TASK_REQUEUE_LIMIT = 2
 
 # =================多线程配置=================
 MAX_CONCURRENT = 2  # 同时回测的最大数量（你的账号限制）
@@ -239,18 +247,31 @@ class BrainSession:
 
     def __init__(self):
         self._session = requests.Session()
-        self._session.auth = HTTPBasicAuth(API_KEY, API_SECRET)
+        self._session.auth = HTTPBasicAuth(str(API_KEY), str(API_SECRET))
         self._last_auth_time = 0
         self._authenticate()
 
     def _authenticate(self):
-        response = self._session.post(f"{BASE_URL}/authentication")
-        if response.status_code in (200, 201):
-            self._last_auth_time = time.time()
-            logger.info(f"登录成功， {response.text}")
-        else:
-            logger.error(f"登录失败: {response.status_code} - {response.text}")
-            exit()
+        last_error = None
+        for attempt in range(1, REQUEST_RETRIES + 1):
+            try:
+                response = self._session.post(f"{BASE_URL}/authentication", timeout=REQUEST_TIMEOUT)
+                if response.status_code in (200, 201):
+                    self._last_auth_time = time.time()
+                    logger.info(f"登录成功， {response.text}")
+                    return
+                logger.error(f"登录失败: {response.status_code} - {response.text}")
+                last_error = RuntimeError(f"auth status {response.status_code}")
+            except requests.exceptions.RequestException as exc:
+                last_error = exc
+                logger.warning(f"登录请求异常，第 {attempt}/{REQUEST_RETRIES} 次: {exc}")
+
+            if attempt < REQUEST_RETRIES:
+                wait_time = min(REQUEST_RETRY_SLEEP * attempt, 10)
+                sleep(wait_time)
+
+        logger.error(f"登录重试后仍失败: {last_error}")
+        exit()
 
     def _ensure_valid(self):
         elapsed = time.time() - self._last_auth_time
@@ -258,25 +279,38 @@ class BrainSession:
             logger.info(f"会话已持续 {elapsed/3600:.1f} 小时，正在重新认证...")
             self._authenticate()
 
-    def get(self, *args, **kwargs):
+    def _request_with_retry(self, method_name, *args, **kwargs):
         self._ensure_valid()
-        return self._session.get(*args, **kwargs)
+        kwargs.setdefault("timeout", REQUEST_TIMEOUT)
+
+        request_method = getattr(self._session, method_name)
+        for attempt in range(1, REQUEST_RETRIES + 1):
+            try:
+                return request_method(*args, **kwargs)
+            except requests.exceptions.RequestException as exc:
+                if attempt >= REQUEST_RETRIES:
+                    raise
+                wait_time = min(REQUEST_RETRY_SLEEP * attempt, 10)
+                logger.warning(
+                    f"{method_name.upper()} 请求异常，第 {attempt}/{REQUEST_RETRIES} 次重试，"
+                    f"{wait_time}s 后重试: {exc}"
+                )
+                sleep(wait_time)
+
+    def get(self, *args, **kwargs):
+        return self._request_with_retry('get', *args, **kwargs)
 
     def post(self, *args, **kwargs):
-        self._ensure_valid()
-        return self._session.post(*args, **kwargs)
+        return self._request_with_retry('post', *args, **kwargs)
 
     def put(self, *args, **kwargs):
-        self._ensure_valid()
-        return self._session.put(*args, **kwargs)
+        return self._request_with_retry('put', *args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        self._ensure_valid()
-        return self._session.delete(*args, **kwargs)
+        return self._request_with_retry('delete', *args, **kwargs)
 
     def patch(self, *args, **kwargs):
-        self._ensure_valid()
-        return self._session.patch(*args, **kwargs)
+        return self._request_with_retry('patch', *args, **kwargs)
 
     @property
     def auth(self):
@@ -397,13 +431,43 @@ def increment_success_count():
             logger.debug(f"定期保存进度... 本次成功: {current_success_count}")
             update_simulated_count()
 
+
+def parse_json_with_retry(response, context, refresh_func=None):
+    """解析响应 JSON，失败时短暂重试，必要时刷新响应后再试"""
+    for attempt in range(1, RESULT_JSON_RETRIES + 1):
+        try:
+            return response.json()
+        except requests.exceptions.JSONDecodeError as exc:
+            if attempt >= RESULT_JSON_RETRIES:
+                logger.error(f"{context} JSON 解析失败，已达重试上限: {exc}")
+                logger.debug(f"{context} 响应文本预览: {response.text[:300]!r}")
+                raise
+            wait_time = RESULT_JSON_RETRY_SLEEP * attempt
+            logger.warning(
+                f"{context} JSON 解析失败，第 {attempt}/{RESULT_JSON_RETRIES} 次重试，"
+                f"{wait_time}s 后重试"
+            )
+            sleep(wait_time)
+            if refresh_func is not None:
+                response = refresh_func()
+
 # =================== 生产者进程 =====================
 def submit_alpha_thread(sess, saved_path, elite_path):
     logger.info("启动")
     while not stop_event.is_set():
+        acquired = False
+        queue_item_done = False
+        idx = None
+        alpha_expression = None
+        submit_attempt = 0
         try:
             try:
-                idx, alpha_expression = alpha_expression_queue.get(timeout=1)
+                item = alpha_expression_queue.get(timeout=1)
+                if isinstance(item, tuple) and len(item) == 3:
+                    idx, alpha_expression, submit_attempt = item
+                else:
+                    idx, alpha_expression = item
+                    submit_attempt = 0
             except queue.Empty:
                 continue
             
@@ -474,18 +538,36 @@ def submit_alpha_thread(sess, saved_path, elite_path):
             if sim_resp.status_code not in (200, 201):
                 logger.error(f"回测请求失败！响应内容:{sim_resp.text[:500]}")
                 semaphore.release()  # 回测失败要释放信号量
+                acquired = False
                 alpha_expression_queue.task_done()  # 标记任务完成
+                queue_item_done = True
+                if submit_attempt < SUBMIT_TASK_REQUEUE_LIMIT:
+                    retry_attempt = submit_attempt + 1
+                    logger.warning(
+                        f"提交失败 [序号 {idx}]，将重入队列重试 ({retry_attempt}/{SUBMIT_TASK_REQUEUE_LIMIT})"
+                    )
+                    alpha_expression_queue.put((idx, alpha_expression, retry_attempt))
                 continue
 
             if 'Location' not in sim_resp.headers:
                 logger.error("响应中没有 Location header!")
                 logger.debug(f"响应 headers: {dict(sim_resp.headers)}")
                 semaphore.release()  # 回测失败要释放信号量
+                acquired = False
                 alpha_expression_queue.task_done()  # 标记任务完成
+                queue_item_done = True
                 try:
-                    logger.debug(f"响应 body: {json.dumps(sim_resp.json(), indent=2, ensure_ascii=False)}")
+                    logger.debug(
+                        f"响应 body: {json.dumps(parse_json_with_retry(sim_resp, '提交回测响应'), indent=2, ensure_ascii=False)}"
+                    )
                 except Exception:
                     logger.debug(f"响应 body: {sim_resp.text[:500]}")
+                if submit_attempt < SUBMIT_TASK_REQUEUE_LIMIT:
+                    retry_attempt = submit_attempt + 1
+                    logger.warning(
+                        f"缺少 Location [序号 {idx}]，将重入队列重试 ({retry_attempt}/{SUBMIT_TASK_REQUEUE_LIMIT})"
+                    )
+                    alpha_expression_queue.put((idx, alpha_expression, retry_attempt))
                 sleep(5)
                 continue
 
@@ -506,16 +588,30 @@ def submit_alpha_thread(sess, saved_path, elite_path):
             
             # 标记表达式队列任务完成
             alpha_expression_queue.task_done()
+            queue_item_done = True
             
         except Exception as e:
             if stop_event.is_set():
                 break
             logger.error(f"提交 Alpha 表达式失败: {e}")
             logger.error(traceback.format_exc())
-            try:
-                semaphore.release()  # 回测失败要释放信号量
-            except :
-                pass
+            if acquired:
+                try:
+                    semaphore.release()  # 回测失败要释放信号量
+                    acquired = False
+                except Exception:
+                    pass
+            if idx is not None and alpha_expression is not None and submit_attempt < SUBMIT_TASK_REQUEUE_LIMIT:
+                retry_attempt = submit_attempt + 1
+                logger.warning(
+                    f"提交异常 [序号 {idx}]，将重入队列重试 ({retry_attempt}/{SUBMIT_TASK_REQUEUE_LIMIT})"
+                )
+                alpha_expression_queue.put((idx, alpha_expression, retry_attempt))
+            if not queue_item_done:
+                try:
+                    alpha_expression_queue.task_done()
+                except Exception:
+                    pass
 
 
 # =================== 消费者进程 =====================
@@ -550,6 +646,7 @@ def get_result_thread(sess):
             from datetime import datetime
             MAX_WAIT_SEC = 1800  # 最大等待 30 分钟，超时则跳过
             timed_out = False  # 标记是否超时
+            sim_progress_resp = None
             
             while True:
                 # 检查停止标志
@@ -617,11 +714,31 @@ def get_result_thread(sess):
             # ================== 处理结果 ==================
             # 这部分代码从原simulate_alpha函数复制（第194-252行）
             
-            # 如果因为停止标志或超时退出，跳过后续处理
-            if stop_event.is_set() or timed_out:
+            # 如果因为停止标志退出，结束线程
+            if stop_event.is_set():
                 break
+
+            # 单个任务超时时仅跳过该任务，不退出结果线程
+            if timed_out:
+                logger.warning(f"跳过超时任务 [序号 {idx}]，继续处理后续任务")
+                continue
+
+            if sim_progress_resp is None:
+                logger.error(f"回测进度响应为空 [序号 {idx}]，跳过该任务")
+                task_queue.task_done()
+                semaphore.release()
+                continue
             
-            sim_result = sim_progress_resp.json()
+            sim_result = parse_json_with_retry(
+                sim_progress_resp,
+                f"回测进度结果 [序号 {idx}]",
+                refresh_func=lambda: sess.get(sim_progress_url),
+            )
+            if not isinstance(sim_result, dict):
+                logger.error(f"回测结果格式异常 [序号 {idx}]，类型: {type(sim_result)}")
+                task_queue.task_done()
+                semaphore.release()
+                continue
             sim_status = sim_result.get("status", "UNKNOWN")
             
             # 再次检查停止标志
@@ -639,13 +756,13 @@ def get_result_thread(sess):
                 semaphore.release()  # ================== V操作 ==================
                 continue
             
-            if "alpha" not in sim_result:
+            alpha_id = sim_result.get("alpha")
+            if not alpha_id:
                 logger.error("响应中没有alpha字段")
                 task_queue.task_done()
                 semaphore.release()  # ================== V操作 ==================
                 continue
-            
-            alpha_id = sim_result["alpha"]
+
             logger.info(f"Alpha ID: {alpha_id}")
             
             # 再次检查停止标志
@@ -659,15 +776,31 @@ def get_result_thread(sess):
             fitness = None
             returns_ = None
             turnover = None
+            is_data = {}
+            logger.debug(f"开始获取 Alpha 详情 [序号 {idx}]，alpha_id={alpha_id}")
             verify_resp = sess.get(f"{BASE_URL}/alphas/{alpha_id}")
             if verify_resp.status_code == 200:
-                alpha_detail = verify_resp.json()
-                is_data = alpha_detail.get("is", {})
+                alpha_detail = parse_json_with_retry(
+                    verify_resp,
+                    f"Alpha详情 [序号 {idx}]",
+                    refresh_func=lambda: sess.get(f"{BASE_URL}/alphas/{alpha_id}"),
+                )
+                if isinstance(alpha_detail, dict):
+                    is_data = alpha_detail.get("is", {})
+                    if not isinstance(is_data, dict):
+                        is_data = {}
+                else:
+                    is_data = {}
                 sharpe = is_data.get("sharpe")
                 fitness = is_data.get("fitness")
                 returns_ = is_data.get("returns")
                 turnover = is_data.get("turnover")
                 logger.info(f"验证成功 | Sharpe={sharpe} | Fitness={fitness}")
+            else:
+                logger.warning(
+                    f"获取 Alpha 详情失败 [序号 {idx}]，状态码 {verify_resp.status_code}，"
+                    f"将按基础记录保存"
+                )
             
             # 再次检查停止标志
             if stop_event.is_set():
@@ -677,10 +810,7 @@ def get_result_thread(sess):
             
             # 保存结果
             from datetime import datetime, timezone
-            if hasattr(datetime, 'UTC'):
-                ts = datetime.now(datetime.UTC).isoformat()
-            else:
-                ts = datetime.now(timezone.utc).isoformat()
+            ts = datetime.now(timezone.utc).isoformat()
             record = {
                 'alpha_id': alpha_id,
                 'expression': alpha_expression,
