@@ -1,11 +1,9 @@
 {
   "name": "第三讲课堂配置模板",
   "description": "零基础第三讲课上的批量生成Alpha配置模板",
-  
   "output": {
     "file": "../alpha_expressions/2026—2-18.json"
   },
-  
   "templates": [
     {
       "name": "group_rank_ts_rank",
@@ -19,7 +17,6 @@
       }
     }
   ],
-  
   "data_files": {
     "fundamental6_datafields": "../Data/fundamental6.csv"
   }

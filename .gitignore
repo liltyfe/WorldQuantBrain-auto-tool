@@ -16,6 +16,10 @@ findalpha_mold/alpha_log/
 # alpha_expression
 findalpha_mold/alpha_expressions/
 
+# mold
+
+findalpha_mold/alpha_mold.txt
+
 # Python
 __pycache__/
 *.py[cod]
@@ -58,3 +62,4 @@ NUL
 
 # Agent instructions file (local-only)
 AGENTS.md
+.codexignore

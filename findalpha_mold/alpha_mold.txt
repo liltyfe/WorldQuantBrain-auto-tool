@@ -1,9 +1,0 @@
-1、group_rank({variate}/cap, subindustry)
-2、{-/+}{variate}/assess
-3、rank({variate}/assess)
-4、rank(decay_linear(ts_delta({field}, 252), 10))
-5、 iv_name = implied_volatility_call_{windows}
-    hv_name = historical_volatility_{windows}
-    alpha_diff = rank({iv_name} - {hv_name})
-    alpha_ratio = rank({iv_name} / {hv_name})
-6、rank(ts_sum(vec_avg({nws12 field}),60)) > 0.5 ? 1: rank(-ts_delta(close, 2))

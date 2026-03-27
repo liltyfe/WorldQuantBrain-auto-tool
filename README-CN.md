@@ -28,6 +28,7 @@ findalpha_mold/
 - `findalpha_mold/python_script/generate_alphas_batch.py`：基于 JSON 配置批量生成表达式
 - `findalpha_mold/python_script/simulateAlpha.py`：批量回测表达式并落盘结果
 - `findalpha_mold/python_script/submitAlpha.py`：提交优质 Alpha
+- `findalpha_mold/python_script/inspect_alpha_packet.py`：检查浏览器导出的 HAR/JSON 数据包并生成字段清单
 
 ## 二、环境要求
 
@@ -122,6 +123,21 @@ python simulateAlpha.py
 ```bash
 python submitAlpha.py
 ```
+
+### 5）检查平台导出的原始数据包
+
+如果你没有可用的官方 API，但已经在浏览器中登录平台，可以先在开发者工具的 `Network` 面板导出 `HAR` 文件，再离线检查其中的回测响应。
+
+```bash
+python inspect_alpha_packet.py --input ../Data/sample.har
+```
+
+常见输出：
+
+- `raw_responses/`：提取出的原始响应 JSON/TXT
+- `field_inventory.csv`：逐字段清单，便于 Excel 筛选
+- `field_summary.csv`：按字段路径聚合后的简表
+- `response_index.json`：响应索引
 
 ## 五、批量生成配置说明
 

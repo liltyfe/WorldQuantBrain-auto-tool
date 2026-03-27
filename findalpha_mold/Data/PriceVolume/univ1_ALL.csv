@@ -1,0 +1,7 @@
+﻿id,description,dataset,category,subcategory,region,delay,universe,type,dateCoverage,coverage,userCount,alphaCount,themes
+top1000,No field description,"{'id': 'univ1', 'name': 'Universe Dataset'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,UNIVERSE,1.0,0.33,6,7,[]
+top200,No field description,"{'id': 'univ1', 'name': 'Universe Dataset'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,UNIVERSE,1.0,0.07,2,7,[]
+top2000,No field description,"{'id': 'univ1', 'name': 'Universe Dataset'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,UNIVERSE,1.0,0.0,0,0,[]
+top3000,No field description,"{'id': 'univ1', 'name': 'Universe Dataset'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,UNIVERSE,1.0,1.0,17,54,[]
+top500,No field description,"{'id': 'univ1', 'name': 'Universe Dataset'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,UNIVERSE,1.0,0.17,9,30,[]
+topsp500,No field description,"{'id': 'univ1', 'name': 'Universe Dataset'}","{'id': 'pv', 'name': 'Price Volume'}","{'id': 'pv-price-volume', 'name': 'Price Volume'}",USA,1,TOP3000,UNIVERSE,1.0,0.22,3,3,[]

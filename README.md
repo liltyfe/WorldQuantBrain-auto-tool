@@ -12,6 +12,7 @@ This project is script-first (interactive CLI style), centered on:
 - `findalpha_mold/python_script/generate_alphas_batch.py` - batch generation from JSON config
 - `findalpha_mold/python_script/simulateAlpha.py` - run alpha simulations and save results
 - `findalpha_mold/python_script/submitAlpha.py` - submit selected alphas
+- `findalpha_mold/python_script/inspect_alpha_packet.py` - inspect exported HAR/JSON packets and list available fields
 
 ## Repository Layout
 
@@ -112,6 +113,22 @@ Outputs include:
 ```bash
 python submitAlpha.py
 ```
+
+### 5) Inspect exported platform packets
+
+If you do not have official API access but can log in from a browser, export a `HAR`
+file from the DevTools `Network` panel and inspect it offline:
+
+```bash
+python inspect_alpha_packet.py --input ../Data/sample.har
+```
+
+Outputs include:
+
+- `raw_responses/`
+- `field_inventory.csv`
+- `field_summary.csv`
+- `response_index.json`
 
 ## Validation Commands
 
