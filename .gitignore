@@ -63,3 +63,10 @@ NUL
 # Agent instructions file (local-only)
 AGENTS.md
 .codexignore
+
+# config
+**\my_config
+
+# data
+findalpha_mold\Data
+findalpha_mold\Data

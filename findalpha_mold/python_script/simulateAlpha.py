@@ -176,7 +176,7 @@ def init_csv_file(csv_path):
             'check_LOW_SHARPE', 'check_LOW_FITNESS', 'check_LOW_TURNOVER',
             'check_HIGH_TURNOVER', 'check_CONCENTRATED_WEIGHT',
             'check_LOW_SUB_UNIVERSE_SHARPE', 'check_SELF_CORRELATION',
-            'check_MATCHES_COMPETITION', 'saved_time'
+            'check_MATCHES_COMPETITION', 'saved_time', 'note'
         ]
         
         with open(csv_path, 'w', encoding='utf-8-sig', newline='') as f:
@@ -229,7 +229,8 @@ def save_to_csv(csv_path, alpha_id, alpha_expression, is_data, checks):
         check_results['check_LOW_SUB_UNIVERSE_SHARPE'],
         check_results['check_SELF_CORRELATION'],
         check_results['check_MATCHES_COMPETITION'],
-        datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        ''
     ]
     
     # 线程安全写入
